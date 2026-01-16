@@ -40,11 +40,11 @@ Este proyecto está enfocado en rendimiento, seguridad, escalabilidad histórica
 ```
 Bot_Consolidador_Ventas/
 ├─ config/
-│   ├─ connections.py
-│   └─ settings.py
+│   ├─ connections.py           # Gestión centralizada de conexiones MySQL
+│   └─ settings.py              # Configuración de comportamiento del bot
 │
 ├─ logs/
-│   └─ bot.log
+│   └─ bot.log                  # Registro de ejecución, errores y auditoría del bot
 │
 ├─ models/
 │   └─ ventas_agrupadas.py      # Modelo de datos para VentasAgrupadas (mapeo, validación y UPSERT)
@@ -65,13 +65,13 @@ Bot_Consolidador_Ventas/
 │   ├─ logger.py
 │   └─ retry.py
 |
-├─ .env.example
-├─ .gitignore
-├─ main.py
-├─ README_DB.md
-├─ README.md
-├─ requirements.txt
-└─ run.sh
+├─ .env.example                 # Ejemplo de variables de entorno (credenciales y conexiones)
+├─ .gitignore                   # Archivos y carpetas excluidos del control de versiones
+├─ main.py                      # Punto de entrada y orquestación del bot
+├─ README_DB.md                 # Documentación técnica de la base de datos y queries
+├─ README.md                    # Documentación general del proyecto
+├─ requirements.txt             # Dependencias necesarias para ejecutar el bot
+└─ run.sh                       # Script de ejecución manual o automatizada (cron/systemd)
 ```
 
 ---
