@@ -15,7 +15,7 @@ INSERT INTO VentasAgrupadas (
     UltimaSync
 )
 VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()
+    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()
 )
 ON DUPLICATE KEY UPDATE
     IdProveedor    = VALUES(IdProveedor),

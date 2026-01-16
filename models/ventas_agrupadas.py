@@ -83,5 +83,5 @@ class VentasAgrupadas:
         if self.id_sucursal <= 0:
             raise ValueError("IdSucursal inválido")
 
-        if self.id_proveedor <= 0:
+        if self.id_proveedor is None or self.id_proveedor < 0:
             raise ValueError("IdProveedor inválido")

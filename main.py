@@ -27,7 +27,7 @@ def run_for_date(process_date):
     # EXTRACCIÓN
     # =========================
     ventas = retry(
-        lambda: extractor.extract(),
+        lambda: extractor.extract(process_date),
         description="extracción de ventas"
     )
 
@@ -50,7 +50,7 @@ def run_for_date(process_date):
     # AUDITORÍA
     # =========================
     audit_ok = retry(
-        lambda: auditor.audit(id_sucursal),
+        lambda: auditor.audit(id_sucursal, process_date),
         description="auditoría de ventas"
     )
 
@@ -75,6 +75,7 @@ def main():
 
         # =========================
         # PROCESAMIENTO POR FECHA
+        # (normal o histórico)
         # =========================
         dates_to_process = get_process_dates(REPROCESS_DAYS)
 

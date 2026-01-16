@@ -1,5 +1,6 @@
 import os
 from typing import List
+from datetime import date, timedelta
 
 from config.connections import MySQLConnectionManager
 from models.ventas_agrupadas import VentasAgrupadas
@@ -22,28 +23,38 @@ class VentasExtractor:
         Carga la consulta SQL desde archivo.
         """
         if not os.path.exists(self.sql_path):
-            raise FileNotFoundError(f"No se encontró el archivo SQL: {self.sql_path}")
+            raise FileNotFoundError(
+                f"No se encontró el archivo SQL: {self.sql_path}"
+            )
 
         with open(self.sql_path, "r", encoding="utf-8") as f:
             return f.read()
 
-    def extract(self) -> List[VentasAgrupadas]:
+    def extract(self, process_date: date) -> List[VentasAgrupadas]:
         """
-        Ejecuta la consulta de agregación en la sucursal y devuelve
-        una lista de objetos VentasAgrupadas.
+        Ejecuta la consulta de agregación en la sucursal para una fecha específica
+        y devuelve una lista de objetos VentasAgrupadas.
         """
-        logger.info("Iniciando extracción de ventas agregadas")
+        logger.info(
+            f"Iniciando extracción de ventas agregadas para fecha {process_date}"
+        )
 
         sql = self._load_sql()
         connection = None
         cursor = None
         ventas: List[VentasAgrupadas] = []
 
+        # Rango del día [fecha, fecha + 1)
+        params = (
+            process_date,
+            process_date + timedelta(days=1)
+        )
+
         try:
             connection = MySQLConnectionManager.connect_sucursal()
             cursor = connection.cursor(dictionary=True)
 
-            cursor.execute(sql)
+            cursor.execute(sql, params)
             rows = cursor.fetchall()
 
             logger.info(f"Filas extraídas: {len(rows)}")

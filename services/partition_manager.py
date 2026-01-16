@@ -13,6 +13,7 @@ class PartitionManager:
     """
 
     TABLE_NAME = "VentasAgrupadas"
+    MAX_PARTITION_NAME = "pMax"
 
     CHECK_PARTITION_SQL = """
         SELECT COUNT(*) AS total
@@ -22,11 +23,11 @@ class PartitionManager:
           AND PARTITION_NAME = %s;
     """
 
-    ADD_PARTITION_SQL = """
+    REORGANIZE_PARTITION_SQL = """
         ALTER TABLE VentasAgrupadas
-        ADD PARTITION (
-            PARTITION {partition_name}
-            VALUES LESS THAN ({less_than})
+        REORGANIZE PARTITION pMax INTO (
+            PARTITION {partition_name} VALUES LESS THAN ({less_than}),
+            PARTITION pMax VALUES LESS THAN MAXVALUE
         );
     """
 
@@ -41,10 +42,6 @@ class PartitionManager:
         return result["total"] > 0
 
     def ensure_year_partition(self, year: int):
-        """
-        Verifica si existe la partición del año indicado.
-        Si no existe, la crea.
-        """
         partition_name = f"p{year}"
         less_than = year + 1
 
@@ -58,9 +55,9 @@ class PartitionManager:
                 logger.info(f"La partición {partition_name} ya existe")
                 return
 
-            logger.warning(f"La partición {partition_name} no existe, creando...")
+            logger.warning(f"La partición {partition_name} no existe, reorganizando pMax")
 
-            sql = self.ADD_PARTITION_SQL.format(
+            sql = self.REORGANIZE_PARTITION_SQL.format(
                 partition_name=partition_name,
                 less_than=less_than
             )
@@ -81,11 +78,6 @@ class PartitionManager:
                 conn.close()
 
     def ensure_current_and_next_year(self):
-        """
-        Asegura que existan las particiones:
-        - año actual
-        - año siguiente
-        """
         current_year = date.today().year
         self.ensure_year_partition(current_year)
         self.ensure_year_partition(current_year + 1)

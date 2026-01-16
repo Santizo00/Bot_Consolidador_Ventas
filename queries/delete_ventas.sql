@@ -4,4 +4,5 @@
 
 DELETE FROM VentasAgrupadas
 WHERE Fecha = CURDATE()
-  AND IdSucursal = ?;
+  AND IdSucursal = %s;
+

@@ -50,6 +50,8 @@ Bot_Consolidador_Ventas/
 │   └─ ventas_agrupadas.py      # Modelo de datos para VentasAgrupadas (mapeo, validación y UPSERT)
 │
 ├─ queries/
+│   ├─ audit_agrupadas.sql      # Auditoría contra ventas_agrupadas
+│   ├─ audit_operativa.sql      # Auditoría contra ventasdiarias
 │   ├─ delete_ventas.sql        # Limpieza idempotente por día/sucursal
 │   ├─ upsert_ventas.sql        # Inserción/actualización idempotente
 │   └─ select_ventas.sql        # Agregación diaria + proveedor (solo sucursal)
