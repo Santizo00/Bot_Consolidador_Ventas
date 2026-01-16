@@ -183,12 +183,99 @@ Script de ejecución manual o para uso con cron/systemd.
 
 ---
 
-## 🚀 Estado del Proyecto
+## 🛠️ Instalación y Ejecución (Modo Desarrollo)
 
-- Diseño de base de datos cerrado
-- Arquitectura validada
-- Listo para implementación del bot
-- Escalable a 60+ sucursales y décadas de información
+### Requisitos
+- Python 3.10 o superior
+- MySQL / MariaDB
+- Acceso a las bases de datos configuradas
+
+---
+
+### 1️⃣ Clonar el repositorio
+
+```bash
+git clone https://github.com/tu-org/Bot_Consolidador_Ventas.git
+cd Bot_Consolidador_Ventas
+```
+
+---
+
+### 2️⃣ Crear entorno virtual (recomendado)
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+---
+
+### 3️⃣ Instalar dependencias
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+### 4️⃣ Configurar variables de entorno
+
+Copiar el archivo de ejemplo:
+
+```bash
+cp .env.example .env
+```
+
+Editar el archivo `.env` con los valores correctos para el entorno local.
+
+---
+
+### 5️⃣ Ejecutar el bot en modo desarrollo
+
+```bash
+./run.sh
+```
+
+O directamente:
+
+```bash
+python3 main.py
+```
+
+---
+
+### 🧪 Recomendaciones para Modo Desarrollo
+
+Se recomienda configurar en `config/settings.py`:
+
+- `DRY_RUN = True`
+- `RUN_LOCAL_ONLY = True`
+
+Esto permite validar:
+- conexiones
+- queries
+- extracción de datos
+- flujo completo del bot
+sin afectar la base de datos en producción.
+
+---
+
+## 🚀 Ejecución en Producción
+
+En producción, el bot se ejecuta como un proceso en segundo plano,
+programado mediante:
+
+- `cron` (ejecución periódica)
+- o `systemd` (servicio persistente)
+
+Características del modo producción:
+- Ejecución automática
+- Sin intervención manual
+- Logs persistentes
+- Monitoreo mediante códigos de salida
+
+El despliegue en producción **no utiliza `run.sh` manualmente**, sino una
+tarea programada que invoca `main.py` de forma controlada.
 
 ---
 
