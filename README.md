@@ -55,15 +55,15 @@ Bot_Consolidador_Ventas/
 │   └─ select_ventas.sql        # Agregación diaria + proveedor (solo sucursal)
 │
 ├─ services/
-│   ├─ auditor.py
-│   ├─ extractor.py
-│   ├─ loader.py
-│   └─ partition_manager.py
+│   ├─ auditor.py               # Validación de consistencia entre BD local y VPS
+│   ├─ extractor.py             # Ejecución del SELECT agregado desde la sucursal
+│   ├─ loader.py                # DELETE + UPSERT idempotente en BD local y VPS
+│   └─ partition_manager.py     # Gestión preventiva de particiones anuales
 │
 ├─ utils/
-│   ├─ helpers.py
-│   ├─ logger.py
-│   └─ retry.py
+│   ├─ helpers.py               # Funciones auxiliares reutilizables
+│   ├─ logger.py                # Configuración centralizada de logging
+│   └─ retry.py                 # Lógica de reintentos controlados
 |
 ├─ .env.example                 # Ejemplo de variables de entorno (credenciales y conexiones)
 ├─ .gitignore                   # Archivos y carpetas excluidos del control de versiones

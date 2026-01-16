@@ -1,6 +1,11 @@
-from pathlib import Path
+from datetime import date, timedelta
 
 
-def read_query(filename: str) -> str:
-    path = Path("queries") / filename
-    return path.read_text(encoding="utf-8")
+def get_process_dates(days: int):
+    """
+    Devuelve una lista de fechas a procesar.
+    Ejemplo: days=1 → [hoy]
+             days=2 → [hoy, ayer]
+    """
+    today = date.today()
+    return [today - timedelta(days=i) for i in range(days)]
