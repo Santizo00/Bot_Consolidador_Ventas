@@ -1,7 +1,7 @@
 -- upsert_ventas.sql
 -- Inserción / actualización idempotente en VentasAgrupadas
 
-INSERT INTO VentasAgrupadas (
+INSERT INTO ventasagrupadas (
     Fecha,
     IdSucursal,
     Upc,

@@ -17,6 +17,7 @@ sin exponer bases operativas, sin VPN y sin consultas en tiempo real, garantizan
 - Cada sucursal procesa y envía datos agregados
 - La VPS solo recibe información resumida
 - El procesamiento pesado ocurre en la sucursal, no en la web
+- **Se utilizan stored procedures para todas las operaciones críticas**
 
 ---
 
@@ -33,22 +34,20 @@ Incluye proveedor y jerarquía de producto para evitar joins costosos en reporte
 
 ```sql
 CREATE TABLE VentasAgrupadas (
-    Fecha DATE NOT NULL,
-    IdSucursal INT NOT NULL,
-    Upc VARCHAR(20) NOT NULL,
+    Fecha DATE,
+    IdSucursal INT,
+    Upc VARCHAR(20),
 
-    IdProveedor INT NOT NULL,
-    IdDepartamento INT NOT NULL,
-    IdCategoria INT NOT NULL,
-    IdSubcategoria INT NOT NULL,
+    IdProveedor INT,
+    IdDepartamento INT,
+    IdCategoria INT,
+    IdSubcategoria INT,
 
-    Unidades INT NOT NULL,
-    VentaTotal DECIMAL(14,2) NOT NULL,
-    CostoTotal DECIMAL(14,2) NOT NULL,
+    Unidades DECIMAL(14,2),
+    VentaTotal DECIMAL(14,2),
+    CostoTotal DECIMAL(14,2),
 
     UltimaSync DATETIME NOT NULL,
-
-    PRIMARY KEY (Fecha, IdSucursal, Upc),
 
     INDEX idx_sucursal_fecha (IdSucursal, Fecha),
     INDEX idx_upc_fecha (Upc, Fecha),
@@ -99,7 +98,10 @@ PARTITION BY RANGE (YEAR(Fecha)) (
 - Clave primaria idempotente para reprocesos
 
 
-### Agregar mas particiones (Anual)
+### Agregar más particiones (Anual)
+
+**Nota:** Actualmente el bot no gestiona particiones automáticamente. Las particiones deben agregarse manualmente según sea necesario.
+
 ```sql
 ALTER TABLE VentasAgrupadas
 ADD PARTITION (
@@ -108,56 +110,159 @@ ADD PARTITION (
 ```
 ---
 
-## 🔍 Query de Selección / Agregación (Sucursal)
+## � Stored Procedures
 
-```sql
-SELECT
-    DATE(v.Fecha)              AS Fecha,
-    v.IdSucursales             AS IdSucursal,
-    v.Upc                      AS Upc,
-
-    p.IdProveedor              AS IdProveedor,
-    v.IdDepartamentos          AS IdDepartamento,
-    v.IdCategorias             AS IdCategoria,
-    v.IdSubcategorias          AS IdSubcategoria,
-
-    SUM(v.Cantidad)            AS Unidades,
-    SUM(v.MontoTotal)          AS VentaTotal,
-    SUM(v.CostoTotal)          AS CostoTotal
-FROM ventasdiarias v
-INNER JOIN productos p
-    ON p.Upc = v.Upc
-WHERE DATE(v.Fecha) = CURDATE()
-GROUP BY
-    DATE(v.Fecha),
-    v.IdSucursales,
-    v.Upc,
-    p.IdProveedor,
-    v.IdDepartamentos,
-    v.IdCategorias,
-    v.IdSubcategorias;
-```
-
-**Por qué es así**
-- El join se hace solo en la sucursal
-- Se evita recalcular proveedor en la web
-- Se optimizan reportes históricos
+El bot utiliza stored procedures para todas las operaciones críticas, garantizando consistencia y rendimiento.
 
 ---
 
-## 🗑️ Query de Limpieza (Idempotencia)
+### 🟢 1. SP de Extracción – `sp_select_ventas_diarias`
+
+**Propósito:** Extraer y agregar ventas del día desde la base operativa (sucursal).
+
+**Base de datos:** Operativa (SuperPOS)
+
+**Parámetros:**
+- `p_fecha` (DATE): Fecha a procesar
+
+**Retorna:** Ventas agregadas por UPC con información de proveedor y jerarquía de producto.
 
 ```sql
-DELETE FROM VentasAgrupadas
-WHERE Fecha = CURDATE()
-  AND IdSucursal = ?;
+DELIMITER $$
+
+CREATE PROCEDURE sp_select_ventas_diarias (
+    IN p_fecha DATE
+)
+BEGIN
+    SELECT
+        v.Fecha AS Fecha,
+        v.Upc   AS Upc,
+
+        COALESCE(p.IdProveedores, 0)   AS IdProveedor,
+        COALESCE(v.IdDepartamentos, 0) AS IdDepartamento,
+        COALESCE(v.IdCategorias, 0)    AS IdCategoria,
+        COALESCE(v.IdSubcategorias, 0) AS IdSubcategoria,
+
+        SUM(v.Cantidad)    AS Unidades,
+        SUM(v.MontoTotal)  AS VentaTotal,
+        SUM(v.CostoTotal)  AS CostoTotal
+    FROM ventasdiarias v
+    LEFT JOIN productos p
+        ON p.Upc = v.Upc
+    WHERE v.Fecha = p_fecha
+    GROUP BY
+        v.Fecha,
+        v.Upc,
+        COALESCE(p.IdProveedores, 0),
+        COALESCE(v.IdDepartamentos, 0),
+        COALESCE(v.IdCategorias, 0),
+        COALESCE(v.IdSubcategorias, 0);
+END$$
+
+DELIMITER ;
 ```
 
-Permite reprocesar el día completo sin duplicados.
+---
+
+### 🟢 2. SP de Eliminación – `sp_delete_ventas_agrupadas`
+
+**Propósito:** Limpiar datos de una fecha específica para permitir reprocesamiento idempotente.
+
+**Base de datos:** Local y VPS (VentasAgrupadas)
+
+**Parámetros:**
+- `p_fecha` (DATE): Fecha a eliminar
+- `p_id_sucursal` (INT): ID de la sucursal
+
+**Retorna:** N/A (operación DELETE)
+
+```sql
+DELIMITER $$
+
+CREATE PROCEDURE sp_delete_ventas_agrupadas (
+    IN p_fecha DATE,
+    IN p_id_sucursal INT
+)
+BEGIN
+    DELETE
+    FROM VentasAgrupadas
+    WHERE Fecha = p_fecha
+      AND IdSucursal = p_id_sucursal;
+END$$
+
+DELIMITER ;
+```
+
+---
+
+### 🟢 3. SP de Auditoría Operativa – `sp_audit_operativa`
+
+**Propósito:** Obtener totales de ventas desde la base operativa para validación.
+
+**Base de datos:** Operativa (SuperPOS)
+
+**Parámetros:**
+- `p_fecha` (DATE): Fecha a auditar
+
+**Retorna:** Totales de Unidades, Venta y Costo.
+
+```sql
+DELIMITER $$
+
+CREATE PROCEDURE sp_audit_operativa (
+    IN p_fecha DATE
+)
+BEGIN
+    SELECT
+        COALESCE(SUM(Cantidad), 0)   AS TotalUnidades,
+        COALESCE(SUM(MontoTotal), 0) AS TotalVenta,
+        COALESCE(SUM(CostoTotal), 0) AS TotalCosto
+    FROM ventasdiarias
+    WHERE Fecha = p_fecha;
+END$$
+
+DELIMITER ;
+```
+
+---
+
+### 🟢 4. SP de Auditoría Agregadas – `sp_audit_ventas_agrupadas`
+
+**Propósito:** Obtener totales desde VentasAgrupadas (local o VPS) para validación.
+
+**Base de datos:** Local y VPS (VentasAgrupadas)
+
+**Parámetros:**
+- `p_fecha` (DATE): Fecha a auditar
+- `p_id_sucursal` (INT): ID de la sucursal
+
+**Retorna:** Totales de Unidades, Venta y Costo.
+
+```sql
+DELIMITER $$
+
+CREATE PROCEDURE sp_audit_ventas_agrupadas (
+    IN p_fecha DATE,
+    IN p_id_sucursal INT
+)
+BEGIN
+    SELECT
+        COALESCE(SUM(Unidades), 0)     AS TotalUnidades,
+        COALESCE(SUM(VentaTotal), 0)   AS TotalVenta,
+        COALESCE(SUM(CostoTotal), 0)   AS TotalCosto
+    FROM VentasAgrupadas
+    WHERE Fecha = p_fecha
+      AND IdSucursal = p_id_sucursal;
+END$$
+
+DELIMITER ;
+```
 
 ---
 
 ## 🔁 Query de UPSERT
+
+**Nota:** Esta es la única operación que **NO** se ejecuta mediante stored procedure, ya que el bot maneja los datos en memoria antes de insertarlos.
 
 ```sql
 INSERT INTO VentasAgrupadas (
@@ -189,29 +294,49 @@ ON DUPLICATE KEY UPDATE
 
 ---
 
-## 🤖 Uso por el Bot
+## 🤖 Flujo de Procesamiento del Bot
 
-Flujo resumido:
+1. **Extracción:** Ejecuta `sp_select_ventas_diarias` en la base operativa (sucursal)
+2. **Validación:** Mapea los datos al modelo `VentasAgrupadas` y valida campos
+3. **UPSERT Local:** Inserta/actualiza datos en la base agregada local
+4. **UPSERT VPS:** Inserta/actualiza datos en la base agregada de la VPS
+5. **Auditoría:**
+   - Ejecuta `sp_audit_operativa` en base operativa
+   - Ejecuta `sp_audit_ventas_agrupadas` en base local
+   - Ejecuta `sp_audit_ventas_agrupadas` en VPS
+   - Compara totales (Unidades, Venta, Costo)
+6. **Reproceso (si falla auditoría):**
+   - Ejecuta `sp_delete_ventas_agrupadas` en local y VPS
+   - Reintenta el proceso completo
+7. **Bitácora:** Registra el resultado en `logs/bitacora_extraccion.csv`
 
-1. Ejecuta SELECT agregado
-2. DELETE del día actual
-3. UPSERT en base local
-4. UPSERT en VPS
-5. Auditoría (sumas y conteos)
-6. Finaliza o reprocesa
+---
 
-El bot controla:
-- integridad
-- consistencia
-- reintentos
-- particiones futuras
+## 📊 Bitácora de Procesamiento
+
+El bot mantiene un archivo CSV con el historial de cada procesamiento:
+
+**Archivo:** `logs/bitacora_extraccion.csv`
+
+**Campos:**
+- `fecha`: Fecha procesada
+- `estado`: OK o ERROR
+- `intentos`: Número de intentos necesarios
+- `filas`: Cantidad de registros procesados
+- `error`: Mensaje de error (si aplica)
+- `fecha_registro`: Timestamp del registro
 
 ---
 
 ## ✅ Estado Final
 
 - Modelo de datos cerrado
-- Escalable a décadas
+- Escalable a décadas mediante particionamiento
 - Reportes rápidos por sucursal, producto y proveedor
 - Sin dependencias operativas
-- Listo para implementación del bot y la web
+- Operaciones críticas mediante stored procedures
+- Auditoría automática y bitácora de procesamiento
+- Listo para producción
+
+
+

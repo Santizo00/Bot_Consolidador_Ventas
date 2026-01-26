@@ -1,91 +1,124 @@
 import sys
+from datetime import date
 
-from config.settings import REPROCESS_DAYS
 from utils.logger import get_logger
-from utils.retry import retry
 from utils.helpers import get_process_dates
+from config.settings import REPROCESS_DAYS, MAX_RETRIES
 
-from services.partition_manager import PartitionManager
 from services.extractor import VentasExtractor
 from services.loader import VentasLoader
 from services.auditor import VentasAuditor
+from services.reprocessor import VentasReprocessor
+from utils.bitacora_csv import registrar_bitacora
 
 logger = get_logger(__name__)
 
 
-def run_for_date(process_date):
+def run_process_for_date(
+    extractor: VentasExtractor,
+    loader: VentasLoader,
+    auditor: VentasAuditor,
+    process_date: date
+):
     """
-    Ejecuta el flujo completo del bot para una fecha específica.
+    Ejecuta para una fecha:
+    - SELECT vía SP
+    - UPSERT
+    - AUDITORÍA
+    Maneja reintentos y registra bitácora CSV.
     """
-    logger.info(f"Iniciando proceso para fecha {process_date}")
+    last_error = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            # =========================
+            # EXTRACCIÓN
+            # =========================
+            ventas = extractor.extract(process_date)
+            filas = len(ventas)
+
+
+            # =========================
+            # UPSERT
+            # =========================
+            if filas > 0:
+                loader.load(ventas)
+            else:
+                logger.info(f"Sin registros para {process_date}")
+                registrar_bitacora(
+                    fecha=process_date,
+                    estado="OK",
+                    intentos=attempt,
+                    filas=0
+                )
+                return
+
+            # =========================
+            # AUDITORÍA
+            # =========================
+            audit_ok = auditor.audit(process_date)
+
+            if not audit_ok:
+                logger.warning(f"Auditoría fallida para {process_date}, reprocesando")
+                VentasReprocessor.delete(process_date)
+                raise Exception("Auditoría fallida")
+
+            # =========================
+            # BITÁCORA OK
+            # =========================
+            registrar_bitacora(
+                fecha=process_date,
+                estado="OK",
+                intentos=attempt,
+                filas=filas
+            )
+            return
+
+        except Exception as e:
+            last_error = str(e)
+            if attempt < MAX_RETRIES:
+                logger.warning(f"Error en intento {attempt}/{MAX_RETRIES} para {process_date}: {last_error}")
+            else:
+                logger.error(f"Error definitivo para {process_date}: {last_error}")
+
+    # =========================
+    # BITÁCORA ERROR FINAL
+    # =========================
+
+    registrar_bitacora(
+        fecha=process_date,
+        estado="ERROR",
+        intentos=MAX_RETRIES,
+        filas=0,
+        error=last_error
+    )
+
+
+def main():
+    logger.info("===== INICIANDO BOT =====")
 
     extractor = VentasExtractor()
     loader = VentasLoader()
     auditor = VentasAuditor()
 
-    # =========================
-    # EXTRACCIÓN
-    # =========================
-    ventas = retry(
-        lambda: extractor.extract(process_date),
-        description="extracción de ventas"
-    )
-
-    if not ventas:
-        logger.warning("No se encontraron ventas para procesar")
-        return
-
-    # Todas las ventas corresponden a la misma sucursal
-    id_sucursal = ventas[0].id_sucursal
-
-    # =========================
-    # CARGA
-    # =========================
-    retry(
-        lambda: loader.load(ventas, id_sucursal),
-        description="carga de ventas"
-    )
-
-    # =========================
-    # AUDITORÍA
-    # =========================
-    audit_ok = retry(
-        lambda: auditor.audit(id_sucursal, process_date),
-        description="auditoría de ventas"
-    )
-
-    if not audit_ok:
-        raise Exception("Auditoría fallida, se requiere reproceso")
-
-    logger.info(f"Proceso completado correctamente para fecha {process_date}")
-
-
-def main():
-    logger.info("===== INICIANDO BOT CONSOLIDADOR DE VENTAS =====")
-
     try:
-        # =========================
-        # PARTICIONES
-        # =========================
-        pm = PartitionManager()
-        retry(
-            lambda: pm.ensure_current_and_next_year(),
-            description="gestión de particiones"
-        )
-
-        # =========================
-        # PROCESAMIENTO POR FECHA
-        # (normal o histórico)
-        # =========================
         dates_to_process = get_process_dates(REPROCESS_DAYS)
+        logger.info(f"Procesando {len(dates_to_process)} fecha(s)")
 
         for process_date in dates_to_process:
-            run_for_date(process_date)
+            run_process_for_date(
+                extractor,
+                loader,
+                auditor,
+                process_date
+            )
 
-        logger.info("===== BOT FINALIZADO SIN ERRORES =====")
+        logger.info("===== BOT FINALIZADO =====")
 
     except Exception as e:
-        logger.critical(f"Error crítico en ejecución del bot: {e}")
+        logger.critical(
+            f"Error crítico inesperado en ejecución del bot: {e}"
+        )
         sys.exit(1)
 
 

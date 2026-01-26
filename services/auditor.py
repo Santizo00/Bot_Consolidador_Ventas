@@ -1,9 +1,8 @@
-import os
 from decimal import Decimal
 from typing import Dict
 
 from config.connections import MySQLConnectionManager
-from config.settings import ENABLE_AUDIT, AUDIT_TOLERANCE
+from config.settings import ENABLE_AUDIT, AUDIT_TOLERANCE, ID_SUCURSAL
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -11,158 +10,124 @@ logger = get_logger(__name__)
 
 class VentasAuditor:
     """
-    Servicio encargado de validar la consistencia de los datos
-    entre la base operativa (ventasdiarias)
-    y las bases agregadas (local y VPS),
-    por fecha y sucursal.
+    Auditoría de consistencia:
+    - Operativa vs Local
+    - Operativa vs VPS
     """
 
-    def __init__(
-        self,
-        sql_operativa_path: str = "queries/audit_operativa.sql",
-        sql_agrupadas_path: str = "queries/audit_agrupadas.sql",
-    ):
-        self.sql_operativa_path = sql_operativa_path
-        self.sql_agrupadas_path = sql_agrupadas_path
-
     # =========================
-    # UTILIDADES
+    # EJECUCIÓN DE SP
     # =========================
-
-    def _load_sql(self, path: str) -> str:
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"No se encontró el archivo SQL: {path}")
-
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-
-    def _execute(self, connection, sql: str, params: tuple) -> Dict:
+    @staticmethod
+    def _execute_sp(connection, sp_name: str, params: list) -> Dict:
         cursor = connection.cursor(dictionary=True)
-        cursor.execute(sql, params)
-        result = cursor.fetchone()
-        cursor.close()
-        return result or {}
+        cursor.callproc(sp_name, params)
 
+        result = {}
+        for res in cursor.stored_results():
+            result = res.fetchone() or {}
+
+        cursor.close()
+        return result
+
+    # =========================
+    # COMPARACIÓN NUMÉRICA
+    # =========================
     @staticmethod
     def _diff_ok(a, b) -> bool:
-        """
-        Compara dos valores numéricos usando Decimal
-        para evitar errores de precisión y tipos.
-        """
         da = Decimal(str(a))
         db = Decimal(str(b))
-        tolerance = Decimal(str(AUDIT_TOLERANCE))
-
-        return abs(da - db) <= tolerance
+        tol = Decimal(str(AUDIT_TOLERANCE))
+        return abs(da - db) <= tol
 
     # =========================
     # AUDITORÍA PRINCIPAL
     # =========================
-
-    def audit(self, id_sucursal: int, process_date) -> bool:
-        """
-        Ejecuta auditoría por fecha y sucursal.
-        Compara:
-        - ventasdiarias vs ventas_agrupadas (local)
-        - ventas_agrupadas local vs VPS
-        """
-
+    def audit(self, process_date) -> bool:
         if not ENABLE_AUDIT:
             logger.warning("Auditoría deshabilitada por configuración")
             return True
 
-        logger.info(
-            f"Iniciando auditoría para sucursal {id_sucursal} - fecha {process_date}"
-        )
-
-        sql_operativa = self._load_sql(self.sql_operativa_path)
-        sql_agrupadas = self._load_sql(self.sql_agrupadas_path)
-
-        conn_operativa = None
+        conn_op = None
         conn_local = None
         conn_vps = None
 
         try:
-            conn_operativa = MySQLConnectionManager.connect_sucursal()
+            # =========================
+            # CONEXIONES
+            # =========================
+            conn_op = MySQLConnectionManager.connect_sucursal()
             conn_local = MySQLConnectionManager.connect_local()
             conn_vps = MySQLConnectionManager.connect_vps()
 
-            operativa = self._execute(
-                conn_operativa,
-                sql_operativa,
-                (process_date, id_sucursal),
+            # =========================
+            # AUDITORÍA OPERATIVA
+            # =========================
+            operativa = self._execute_sp(
+                conn_op,
+                "sp_audit_operativa",
+                [process_date]
             )
 
-            local = self._execute(
+            # =========================
+            # AUDITORÍA AGREGADAS
+            # =========================
+            local = self._execute_sp(
                 conn_local,
-                sql_agrupadas,
-                (process_date, id_sucursal),
+                "sp_audit_ventas_agrupadas",
+                [process_date, ID_SUCURSAL]
             )
 
-            vps = self._execute(
+            vps = self._execute_sp(
                 conn_vps,
-                sql_agrupadas,
-                (process_date, id_sucursal),
+                "sp_audit_ventas_agrupadas",
+                [process_date, ID_SUCURSAL]
             )
 
-            logger.info(f"Operativa: {operativa}")
-            logger.info(f"Local:     {local}")
-            logger.info(f"VPS:       {vps}")
-
             # =========================
-            # COMPARACIÓN OPERATIVA vs LOCAL
+            # OPERATIVA vs LOCAL
             # =========================
-
-            if operativa["TotalFilas"] != local["TotalFilas"]:
-                logger.error("Diferencia en cantidad de filas (operativa vs local)")
-                return False
-
             if not self._diff_ok(
                 operativa["TotalUnidades"], local["TotalUnidades"]
             ):
-                logger.error("Diferencia en unidades (operativa vs local)")
+                logger.error(f"Auditoría fallida: Unidades Operativa={operativa['TotalUnidades']} vs Local={local['TotalUnidades']}")
                 return False
 
             if not self._diff_ok(
                 operativa["TotalVenta"], local["TotalVenta"]
             ):
-                logger.error("Diferencia en ventas (operativa vs local)")
+                logger.error(f"Auditoría fallida: Ventas Operativa={operativa['TotalVenta']} vs Local={local['TotalVenta']}")
                 return False
 
             if not self._diff_ok(
                 operativa["TotalCosto"], local["TotalCosto"]
             ):
-                logger.error("Diferencia en costos (operativa vs local)")
+                logger.error(f"Auditoría fallida: Costos Operativa={operativa['TotalCosto']} vs Local={local['TotalCosto']}")
                 return False
 
             # =========================
-            # COMPARACIÓN LOCAL vs VPS
+            # OPERATIVA vs VPS
             # =========================
-
-            if local["TotalFilas"] != vps["TotalFilas"]:
-                logger.error("Diferencia en cantidad de filas (local vs VPS)")
+            if not self._diff_ok(
+                operativa["TotalUnidades"], vps["TotalUnidades"]
+            ):
+                logger.error(f"Auditoría fallida: Unidades Operativa={operativa['TotalUnidades']} vs VPS={vps['TotalUnidades']}")
                 return False
 
             if not self._diff_ok(
-                local["TotalUnidades"], vps["TotalUnidades"]
+                operativa["TotalVenta"], vps["TotalVenta"]
             ):
-                logger.error("Diferencia en unidades (local vs VPS)")
+                logger.error(f"Auditoría fallida: Ventas Operativa={operativa['TotalVenta']} vs VPS={vps['TotalVenta']}")
                 return False
 
             if not self._diff_ok(
-                local["TotalVenta"], vps["TotalVenta"]
+                operativa["TotalCosto"], vps["TotalCosto"]
             ):
-                logger.error("Diferencia en ventas (local vs VPS)")
-                return False
-
-            if not self._diff_ok(
-                local["TotalCosto"], vps["TotalCosto"]
-            ):
-                logger.error("Diferencia en costos (local vs VPS)")
+                logger.error(f"Auditoría fallida: Costos Operativa={operativa['TotalCosto']} vs VPS={vps['TotalCosto']}")
                 return False
 
             logger.info(
-                f"Auditoría OK para sucursal {id_sucursal} - fecha {process_date}"
+                f"[OK] {process_date} | Unidades: {operativa['TotalUnidades']} | Venta: ${operativa['TotalVenta']} | Costo: ${operativa['TotalCosto']}"
             )
             return True
 
@@ -171,8 +136,8 @@ class VentasAuditor:
             raise
 
         finally:
-            if conn_operativa:
-                conn_operativa.close()
+            if conn_op:
+                conn_op.close()
             if conn_local:
                 conn_local.close()
             if conn_vps:

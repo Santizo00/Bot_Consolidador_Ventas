@@ -42,15 +42,20 @@ class VentasAgrupadas:
             self.costo_total
         )
 
-    @staticmethod
-    def from_db_row(row: dict) -> "VentasAgrupadas":
+    @classmethod
+    def from_db_row(
+        cls,
+        row: dict,
+        id_sucursal: int
+    ) -> "VentasAgrupadas":
         """
         Crea una instancia del modelo a partir de un row retornado
-        por el SELECT agregado (dict o mapping).
+        por el Stored Procedure.
+        IdSucursal se inyecta desde el contexto, NO desde la BD.
         """
-        return VentasAgrupadas(
+        return cls(
             fecha=row["Fecha"],
-            id_sucursal=row["IdSucursal"],
+            id_sucursal=id_sucursal,
             upc=row["Upc"],
 
             id_proveedor=row["IdProveedor"],
@@ -68,18 +73,6 @@ class VentasAgrupadas:
         Validaciones básicas de integridad antes de insertar.
         Lanza ValueError si algo no es válido.
         """
-        if not self.upc:
-            raise ValueError("UPC no puede ser vacío")
-
-        if self.unidades < 0:
-            raise ValueError("Unidades no puede ser negativo")
-
-        if self.venta_total < 0:
-            raise ValueError("VentaTotal no puede ser negativo")
-
-        if self.costo_total < 0:
-            raise ValueError("CostoTotal no puede ser negativo")
-
         if self.id_sucursal <= 0:
             raise ValueError("IdSucursal inválido")
 

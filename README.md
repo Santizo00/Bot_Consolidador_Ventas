@@ -44,33 +44,30 @@ Bot_Consolidador_Ventas/
 │   └─ settings.py              # Configuración de comportamiento del bot
 │
 ├─ logs/
-│   └─ bot.log                  # Registro de ejecución, errores y auditoría del bot
+│   ├─ bot.log                  # Registro de ejecución, errores y auditoría del bot
+│   └─ bitacora_extraccion.csv  # Bitácora CSV con resumen de cada procesamiento
 │
 ├─ models/
-│   └─ ventas_agrupadas.py      # Modelo de datos para VentasAgrupadas (mapeo, validación y UPSERT)
+│   └─ ventas_agrupadas.py      # Modelo de datos para VentasAgrupadas (mapeo y validación)
 │
 ├─ queries/
-│   ├─ audit_agrupadas.sql      # Auditoría contra ventas_agrupadas
-│   ├─ audit_operativa.sql      # Auditoría contra ventasdiarias
-│   ├─ delete_ventas.sql        # Limpieza idempotente por día/sucursal
-│   ├─ upsert_ventas.sql        # Inserción/actualización idempotente
-│   └─ select_ventas.sql        # Agregación diaria + proveedor (solo sucursal)
+│   └─ upsert_ventas.sql        # Inserción/actualización idempotente
 │
 ├─ services/
 │   ├─ auditor.py               # Validación de consistencia entre BD local y VPS
-│   ├─ extractor.py             # Ejecución del SELECT agregado desde la sucursal
-│   ├─ loader.py                # DELETE + UPSERT idempotente en BD local y VPS
-│   └─ partition_manager.py     # Gestión preventiva de particiones anuales
+│   ├─ extractor.py             # Ejecución del SP de agregación desde la sucursal
+│   ├─ loader.py                # UPSERT idempotente en BD local y VPS
+│   └─ reprocessor.py           # Limpieza de datos para reprocesamiento
 │
 ├─ utils/
+│   ├─ bitacora_csv.py          # Registro de bitácora en formato CSV
 │   ├─ helpers.py               # Funciones auxiliares reutilizables
-│   ├─ logger.py                # Configuración centralizada de logging
-│   └─ retry.py                 # Lógica de reintentos controlados
-|
+│   └─ logger.py                # Configuración centralizada de logging
+│
 ├─ .env.example                 # Ejemplo de variables de entorno (credenciales y conexiones)
 ├─ .gitignore                   # Archivos y carpetas excluidos del control de versiones
 ├─ main.py                      # Punto de entrada y orquestación del bot
-├─ README_DB.md                 # Documentación técnica de la base de datos y queries
+├─ README_DB.md                 # Documentación técnica de la base de datos y stored procedures
 ├─ README.md                    # Documentación general del proyecto
 ├─ requirements.txt             # Dependencias necesarias para ejecutar el bot
 └─ run.sh                       # Script de ejecución manual o automatizada (cron/systemd)
@@ -94,29 +91,38 @@ Responsabilidades:
 ### 🔹 `config/`
 Configuración general del proyecto.
 
-- `settings.py`: parámetros globales (timeouts, reintentos, flags)
 - `connections.py`: manejo de conexiones a:
   - Base operativa (SuperPOS)
   - Base agregada local
   - Base agregada en VPS
+- `settings.py`: parámetros globales (timeouts, reintentos, flags)
 
-Las credenciales se cargan desde variables de entorno.
+Las credenciales se cargan desde variables de entorno (.env).
+
+---
+
+### 🔹 `logs/`
+Almacena los logs de ejecución del bot.
+
+- `bot.log`: eventos, errores y auditorías en formato detallado
+- `bitacora_extraccion.csv`: resumen de cada procesamiento (fecha, estado, intentos, filas)
+- No se registran datos sensibles
 
 ---
 
 ### 🔹 `models/`
 Define la estructura lógica de los datos que maneja el bot.
 
-- `ventas_agrupadas.py`: representación del modelo VentasAgrupadas para validaciones y mapeo
+- `ventas_agrupadas.py`: representación del modelo VentasAgrupadas para validaciones y mapeo desde stored procedures
 
 ---
 
 ### 🔹 `queries/`
-Contiene las consultas SQL separadas del código.
+Contiene consultas SQL separadas del código.
 
-- `select_ventas.sql`: consulta de agregación desde ventasdiarias + productos
-- `delete_ventas.sql`: limpieza idempotente por fecha y sucursal
 - `upsert_ventas.sql`: inserción/actualización en tablas agregadas
+
+**Nota:** Las demás operaciones (SELECT, DELETE, auditorías) se ejecutan mediante **stored procedures** directamente en las bases de datos.
 
 Separar las queries permite:
 - mantenimiento sencillo
@@ -128,34 +134,26 @@ Separar las queries permite:
 ### 🔹 `services/`
 Contiene la lógica principal del bot.
 
+- `auditor.py`  
+  Ejecuta stored procedures de auditoría para comparar conteos y sumas entre base operativa, local y VPS.
+
 - `extractor.py`  
-  Ejecuta la consulta de agregación y obtiene los datos consolidados.
+  Ejecuta el stored procedure `sp_select_ventas_diarias` y obtiene los datos consolidados.
 
 - `loader.py`  
-  Ejecuta DELETE y UPSERT tanto en base local como en la VPS.
+  Ejecuta UPSERT tanto en base local como en la VPS.
 
-- `auditor.py`  
-  Compara conteos y sumas entre base local y VPS para validar consistencia.
-
-- `partition_manager.py`  
-  Verifica y crea particiones nuevas cuando se requiere (por año).
+- `reprocessor.py`  
+  Ejecuta el stored procedure `sp_delete_ventas_agrupadas` para limpiar datos antes de reprocesar.
 
 ---
 
 ### 🔹 `utils/`
 Utilidades compartidas.
 
+- `bitacora_csv.py`: registro de resumen de procesamiento en formato CSV
+- `helpers.py`: funciones comunes reutilizables (cálculo de fechas a procesar)
 - `logger.py`: configuración de logs estructurados
-- `retry.py`: lógica de reintentos controlados
-- `helpers.py`: funciones comunes reutilizables
-
----
-
-### 🔹 `logs/`
-Almacena los logs de ejecución del bot.
-
-- `bot.log`: eventos, errores y auditorías
-- No se registran datos sensibles
 
 ---
 
@@ -164,24 +162,18 @@ Script de ejecución manual o para uso con cron/systemd.
 
 ---
 
-## 🤖 Flujo de Ejecución del Bot
+## Flujo de Ejecución del Bot
 
-1. Ejecuta la consulta de agregación en la sucursal
-2. Elimina datos existentes del día actual (idempotencia)
-3. Inserta/actualiza datos agregados en base local
-4. Inserta/actualiza datos agregados en la VPS
-5. Ejecuta auditoría de consistencia
-6. Finaliza o reprocesa si detecta inconsistencias
-
----
-
-## 🔐 Seguridad
-
-- Credenciales vía variables de entorno
-- Usuarios MySQL con privilegios mínimos
-- Sin puertos abiertos
-- Sin acceso entrante desde Internet
-- Sin replicación de información sensible
+1. Ejecuta el **stored procedure** `sp_select_ventas_diarias` en la sucursal para obtener ventas agregadas
+2. Valida y mapea los datos al modelo `VentasAgrupadas`
+3. Ejecuta **UPSERT** idempotente en base local
+4. Ejecuta **UPSERT** idempotente en la VPS
+5. Ejecuta **stored procedures de auditoría** para validar consistencia:
+   - `sp_audit_operativa` en base operativa
+   - `sp_audit_ventas_agrupadas` en base local y VPS
+6. Si la auditoría falla, ejecuta `sp_delete_ventas_agrupadas` y reprocesa
+7. Registra el resultado en `bitacora_extraccion.csv`
+8. Maneja reintentos automáticos en caso de error
 
 ---
 
@@ -197,7 +189,7 @@ Script de ejecución manual o para uso con cron/systemd.
 ### 1️⃣ Clonar el repositorio
 
 ```bash
-git clone https://github.com/tu-org/Bot_Consolidador_Ventas.git
+git https://github.com/Santizo00/Bot_Consolidador_Ventas.git
 cd Bot_Consolidador_Ventas
 ```
 
@@ -205,9 +197,25 @@ cd Bot_Consolidador_Ventas
 
 ### 2️⃣ Crear entorno virtual (recomendado)
 
+Windows (PowerShell):
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+Windows (CMD):
+
+```bat
+python -m venv .venv
+.\.venv\Scripts\activate.bat
+```
+
+macOS/Linux:
+
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
 ---
